@@ -46,6 +46,13 @@ pipeline {
                 sh 'mvn clean verify'
             }
         }
+
+        stage('Build Docker Image') {
+            steps {
+                sh 'docker build -t testfoodfreezy .'
+            }
+        }
+
         stage('Trivy Scan') {
             steps {
                 sh '''
