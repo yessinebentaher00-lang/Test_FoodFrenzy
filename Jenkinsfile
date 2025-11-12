@@ -14,10 +14,11 @@ pipeline {
 
         stage('Checkout') {
             steps {
+                // Clean workspace and checkout from GitHub
+                deleteDir()
                 checkout([$class: 'GitSCM',
                           branches: [[name: 'main']],
-                          userRemoteConfigs: [[url: 'https://github.com/yessinebentaher00-lang/FoodApp']],
-                          extensions: [[$class: 'WipeWorkspace']]
+                          userRemoteConfigs: [[url: 'https://github.com/yessinebentaher00-lang/Test_FoodFrenzy']]
                 ])
             }
         }
@@ -40,19 +41,30 @@ pipeline {
                 archiveArtifacts artifacts: 'target/site/spotbugs.html', allowEmptyArchive: true
             }
         }
-
         stage('Build + Test') {
             steps {
-                sh 'mvn clean verify'
+                // Build and test the project (generates target/*.jar or WAR)
+                sh 'mvn clean verify -DskipTests=false'
+            }
+        }
+
+        stage('Verify Workspace') {
+            steps {
+                // Debug: list all files in the workspace
+                sh '''
+                    echo "Current directory: $(pwd)"
+                    echo "Files in workspace:"
+                    ls -la
+                '''
             }
         }
 
         stage('Build Docker Image') {
             steps {
-                sh 'docker build -t testfoodfreezy .'
+                // Build Docker image, explicitly pointing to Dockerfile in workspace
+                sh 'docker build -f $WORKSPACE/Dockerfile -t testfoodfreezy $WORKSPACE'
             }
         }
-
         stage('Trivy Scan') {
             steps {
                 sh '''
@@ -80,7 +92,7 @@ pipeline {
                 script {
                     // create directory in the workspace/project root
                     sh "mkdir -p ${WORKSPACE}/secrets_reports"
-        
+
                     // run gitleaks
                     sh """
                     docker run --rm -v ${WORKSPACE}:/code zricethezav/gitleaks:latest detect \
@@ -115,7 +127,7 @@ pipeline {
             steps {
                 script {
                     sh "docker rm -f zap 2>/dev/null || true"
-        
+
                     // Start ZAP container detached
                     sh """
                         docker run -d --network host --name zap ghcr.io/zaproxy/zaproxy:stable sleep infinity
@@ -127,22 +139,22 @@ pipeline {
                         script: "docker exec zap zap-full-scan.py -t http://localhost:8080 -r /zap/report.html",
                         returnStatus: true
                     )
-        
+
                     // Make sure the reports folder exists
                     sh "mkdir -p ${WORKSPACE}/zap_reports"
-        
+
                     // Copy report
                     sh "docker cp zap:/zap/report.html ${WORKSPACE}/zap_reports/report.html"
-        
+
                     echo "ZAP scan finished with exit code: ${zapExit}"
-        
+
                     // Optional: fail pipeline only if exit code is 1 or 3
                     if (zapExit == 1 || zapExit == 3) {
                         error "ZAP scan failed"
                     }
                 }
             }
-        
+
             post {
                 always {
                     archiveArtifacts artifacts: 'zap_reports/*.html', allowEmptyArchive: true
@@ -150,7 +162,7 @@ pipeline {
                 }
             }
         }
-        
+
         stage('Sonar Analysis') {
             steps {
                 withSonarQubeEnv('SonarQubeServer') {
@@ -167,7 +179,7 @@ pipeline {
             }
         }
 
-        
+
     }
 
     post {
@@ -177,7 +189,7 @@ pipeline {
                 def buildStatus = currentBuild.currentResult
                 def buildUser = currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')[0]?.userId ?: 'GitHub User'
                 def buildUrl = "${env.BUILD_URL}"
-    
+
                 // ✅ Gather all reports into one folder
                 sh '''
                     mkdir -p reports
@@ -188,10 +200,10 @@ pipeline {
                     cp secrets_reports/*.json reports/ 2>/dev/null || true
                     cp zap_reports/*.html reports/ 2>/dev/null || true
                 '''
-    
+
                 // ✅ List collected files
                 sh 'echo "--- Reports Collected ---" && ls -la reports || true'
-    
+
                 // ✅ Create ZIP (fallback to tar if zip missing)
                 sh '''
                     if command -v zip >/dev/null 2>&1; then
@@ -200,7 +212,7 @@ pipeline {
                         tar -czf reports.tar.gz reports/
                     fi
                 '''
-    
+
                 // ✅ Send email with attachments
                 emailext(
                     to: 'yessinebentaher00@gmail.com',

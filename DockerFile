@@ -1,11 +1,14 @@
-# 1️⃣ Base image with JDK
-FROM openjdk:17-jdk-slim
+# Use a specific valid OpenJDK 17 slim image
+FROM eclipse-temurin:17-jdk
 
-# 2️⃣ Set working directory
+# Set working directory
 WORKDIR /app
 
-# 3️⃣ Copy the JAR file from your Maven build
+# Copy built jar into container
 COPY target/*.jar app.jar
 
-# 4️⃣ Run the JAR
+# Expose port your app runs on
+EXPOSE 8080
+
+# Run the app
 ENTRYPOINT ["java", "-jar", "app.jar"]
