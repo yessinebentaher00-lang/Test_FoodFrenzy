@@ -46,6 +46,13 @@ pipeline {
                 sh 'mvn clean verify'
             }
         }
+        stage('Trivy Scan') {
+            steps {
+                sh '''
+                trivy image --format template --template "@contrib/html.tpl" -o trivy-report.html testfoodfreezy || true
+                '''
+            }
+        }
 
         stage('OWASP Dependency-Check Vulnerabilities') {
           steps {
