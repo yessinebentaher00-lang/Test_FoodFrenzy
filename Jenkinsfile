@@ -14,7 +14,6 @@ pipeline {
 
         stage('Checkout') {
             steps {
-                // Clean workspace and checkout from GitHub
                 deleteDir()
                 checkout([$class: 'GitSCM',
                           branches: [[name: 'main']],
@@ -32,6 +31,7 @@ pipeline {
                 '''
                 archiveArtifacts artifacts: 'semgrep-report.json', allowEmptyArchive: true
             }
+
         }
 
         stage('SpotBugs Analysis') {
@@ -41,16 +41,15 @@ pipeline {
                 archiveArtifacts artifacts: 'target/site/spotbugs.html', allowEmptyArchive: true
             }
         }
+
         stage('Build + Test') {
             steps {
-                // Build and test the project (generates target/*.jar or WAR)
                 sh 'mvn clean verify -DskipTests=false'
             }
         }
 
         stage('Verify Workspace') {
             steps {
-                // Debug: list all files in the workspace
                 sh '''
                     echo "Current directory: $(pwd)"
                     echo "Files in workspace:"
@@ -61,15 +60,22 @@ pipeline {
 
         stage('Build Docker Image') {
             steps {
-                // Build Docker image, explicitly pointing to Dockerfile in workspace
                 sh 'docker build -f $WORKSPACE/Dockerfile -t testfoodfreezy $WORKSPACE'
             }
         }
+
         stage('Trivy Scan') {
             steps {
                 sh '''
-                trivy image --format template --template "@contrib/html.tpl" -o trivy-report.html testfoodfreezy || true
+                echo "Running Trivy vulnerability scan..."
+                mkdir -p trivy_reports
+                trivy image --format template --template "@/usr/local/share/trivy/templates/html.tpl" -o trivy_reports/trivy-report.html testfoodfreezy || true
                 '''
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'trivy_reports/*.html', allowEmptyArchive: true
+                }
             }
         }
 
@@ -82,7 +88,6 @@ pipeline {
                 --prettyPrint
             ''', odcInstallation: 'DP-Check'
             dependencyCheckPublisher pattern: 'dependency-check-report.xml'
-              // archive HTML report
             archiveArtifacts artifacts: 'dependency-check-report.html', allowEmptyArchive: true
           }
         }
@@ -90,10 +95,8 @@ pipeline {
         stage('Secrets Scan - Gitleaks') {
             steps {
                 script {
-                    // create directory in the workspace/project root
                     sh "mkdir -p ${WORKSPACE}/secrets_reports"
 
-                    // run gitleaks
                     sh """
                     docker run --rm -v ${WORKSPACE}:/code zricethezav/gitleaks:latest detect \
                         --source=/code \
@@ -128,27 +131,21 @@ pipeline {
                 script {
                     sh "docker rm -f zap 2>/dev/null || true"
 
-                    // Start ZAP container detached
                     sh """
                         docker run -d --network host --name zap ghcr.io/zaproxy/zaproxy:stable sleep infinity
                     """
-                    // fix folder zap wrk obligatoire interne
                     sh "docker exec zap mkdir -p /zap/wrk"
-                    // Run scan, capture exit code
+
                     def zapExit = sh(
                         script: "docker exec zap zap-full-scan.py -t http://localhost:8080 -r /zap/report.html",
                         returnStatus: true
                     )
 
-                    // Make sure the reports folder exists
                     sh "mkdir -p ${WORKSPACE}/zap_reports"
-
-                    // Copy report
                     sh "docker cp zap:/zap/report.html ${WORKSPACE}/zap_reports/report.html"
 
                     echo "ZAP scan finished with exit code: ${zapExit}"
 
-                    // Optional: fail pipeline only if exit code is 1 or 3
                     if (zapExit == 1 || zapExit == 3) {
                         error "ZAP scan failed"
                     }
@@ -179,18 +176,15 @@ pipeline {
             }
         }
 
-
     }
 
     post {
         always {
             script {
-                // 🔹 Build details
                 def buildStatus = currentBuild.currentResult
                 def buildUser = currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')[0]?.userId ?: 'GitHub User'
                 def buildUrl = "${env.BUILD_URL}"
 
-                // ✅ Gather all reports into one folder
                 sh '''
                     mkdir -p reports
                     cp semgrep-report.json reports/ 2>/dev/null || true
@@ -199,12 +193,11 @@ pipeline {
                     cp dependency-check-report.html reports/ 2>/dev/null || true
                     cp secrets_reports/*.json reports/ 2>/dev/null || true
                     cp zap_reports/*.html reports/ 2>/dev/null || true
+                    cp trivy_reports/*.html reports/ 2>/dev/null || true
                 '''
 
-                // ✅ List collected files
                 sh 'echo "--- Reports Collected ---" && ls -la reports || true'
 
-                // ✅ Create ZIP (fallback to tar if zip missing)
                 sh '''
                     if command -v zip >/dev/null 2>&1; then
                         zip -r reports.zip reports/
@@ -213,7 +206,6 @@ pipeline {
                     fi
                 '''
 
-                // ✅ Send email with attachments
                 emailext(
                     to: 'yessinebentaher00@gmail.com',
                     subject: "📊 Security Pipeline ${buildStatus} - ${env.JOB_NAME} #${env.BUILD_NUMBER}",
@@ -226,17 +218,15 @@ pipeline {
                             <li><b>Triggered by:</b> ${buildUser}</li>
                             <li><b>Jenkins Build URL:</b> <a href="${buildUrl}">${buildUrl}</a></li>
                         </ul>
-                        <p>All generated reports (Semgrep, SpotBugs, Dependency-Check, Secrets, and ZAP) are attached.</p>
+                        <p>All generated reports (Semgrep, SpotBugs, Dependency-Check, Secrets, Trivy, and ZAP) are attached.</p>
                         <hr>
                         <p>— Jenkins CI/CD Security Pipeline</p>
                     """,
                     mimeType: 'text/html',
-                    attachmentsPattern: 'reports/**', // ✅ Send all files from reports folder
+                    attachmentsPattern: 'reports/**',
                     attachLog: true
                 )
             }
         }
     }
-
-
 }
